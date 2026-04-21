@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { HandLandmarker } from '@mediapipe/tasks-vision';
 import { createHandLandmarker } from '../utils/handDetection';
 import { Loader2, Camera, Play, RotateCcw, AlertCircle, Trophy, User, LogIn, ArrowLeft } from 'lucide-react';
+import { motion, AnimatePresence } from 'motion/react';
 import { auth, signInWithGoogle, submitScore, getTopScores, LeaderboardEntry } from '../lib/firebase';
 import { getSenseiCommentary } from '../lib/gemini';
 import { User as FirebaseUser } from 'firebase/auth';
@@ -56,11 +57,59 @@ interface Splat {
   life: number; // 1.0 to 0
 }
 
+interface Avatar {
+  id: string;
+  name: string;
+  emoji: string;
+  color: string;
+  personality: 'mean' | 'heroic' | 'calm' | 'sarcastic';
+}
+
+interface Region {
+  name: string;
+  fruits: string[];
+  colors: [string, string]; // [inner, outer]
+  accent: string;
+}
+
 // --- Game Constants ---
+const REGIONS: Region[] = [
+  { 
+    name: "Zen Orchard", 
+    fruits: ['🍎', '🍏', '🍌', '🍐', '🍊', '🍓'], 
+    colors: ['#064e3b', '#022c22'],
+    accent: 'text-emerald-500'
+  },
+  { 
+    name: "Tropical Bay", 
+    fruits: ['🍍', '🥥', '🥭', '🥝', '🍉', '🍋'], 
+    colors: ['#1e3a8a', '#1e1b4b'],
+    accent: 'text-blue-500'
+  },
+  { 
+    name: "Shadow Peaks", 
+    fruits: ['🍇', '🫐', '🍑', '🍒', '🍅', '🫒'], 
+    colors: ['#4c1d95', '#2e1065'],
+    accent: 'text-purple-500'
+  },
+  { 
+    name: "Imperial Harvest", 
+    fruits: ['🌽', '🥕', '🍆', '🫑', '🥦', '🧅'], 
+    colors: ['#7c2d12', '#431407'],
+    accent: 'text-orange-600'
+  }
+];
+
+const AVATARS: Avatar[] = [
+  { id: 'shadow', name: 'Shadow', emoji: '🥷', color: 'border-slate-800 bg-slate-900', personality: 'mean' },
+  { id: 'spark', name: 'Spark', emoji: '🦊', color: 'border-orange-500 bg-orange-900/20', personality: 'heroic' },
+  { id: 'zen', name: 'Zen', emoji: '🐼', color: 'border-blue-500 bg-blue-900/20', personality: 'calm' },
+  { id: 'rogue', name: 'Rogue', emoji: '😼', color: 'border-purple-500 bg-purple-900/20', personality: 'sarcastic' }
+];
+
 const GRAVITY = 0.25;
 const FRUIT_SPAWN_RATE = 60; // Frames between spawns
 const BLADE_LENGTH = 10; // Number of points in the trail
-const FRUITS = ['🍎', '🍌', '🍉', '🍊', '🍇', '🍍'];
 const BOMB = '💣';
 const SPECIAL_FRUITS = {
   slowmo: '❄️',
@@ -87,6 +136,10 @@ const NinjaGame: React.FC = () => {
   const [showLeaderboard, setShowLeaderboard] = useState(false);
   const [guestName, setGuestName] = useState("");
   const [isInitializing, setIsInitializing] = useState(false);
+  const [selectedAvatar, setSelectedAvatar] = useState<Avatar>(AVATARS[0]);
+  const [avatarComment, setAvatarComment] = useState<string>("Ready, Ninja?");
+  const commentTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const consecutiveSlicesRef = useRef(0);
 
   // Refs for Game Loop & Physics (Mutable state without re-renders)
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -120,11 +173,17 @@ const NinjaGame: React.FC = () => {
     const unsub = auth.onAuthStateChanged((u) => {
       setUser(u);
     });
+    // Initial leaderboard fetch
+    getTopScores(5).then(setLeaderboard);
     return unsub;
   }, []);
 
+  // Sync gameState state with ref
   useEffect(() => {
     gameStateRef.current = gameState;
+    if (gameState === 'home') {
+      getTopScores(5).then(setLeaderboard);
+    }
   }, [gameState]);
 
   useEffect(() => {
@@ -186,12 +245,16 @@ const NinjaGame: React.FC = () => {
   // 2. Game Logic Helper Functions
 
   const spawnFruit = (width: number, height: number) => {
+    // Determine region based on level (changes every 2 levels)
+    const regionIdx = Math.min(Math.floor((levelRef.current - 1) / 2), REGIONS.length - 1);
+    const region = REGIONS[regionIdx];
+
     // Increase bomb chance with level
     const currentBombChance = Math.min(0.15 + (levelRef.current - 1) * 0.05, 0.4);
     const rng = Math.random();
     
     let type: Fruit['type'] = 'fruit';
-    let emoji = FRUITS[Math.floor(Math.random() * FRUITS.length)];
+    let emoji = region.fruits[Math.floor(Math.random() * region.fruits.length)];
     
     if (rng < currentBombChance) {
       type = 'bomb';
@@ -253,6 +316,63 @@ const NinjaGame: React.FC = () => {
     };
     notificationsRef.current.push(newNotif);
     setNotifications([...notificationsRef.current]);
+
+    // Avatar Commentary Logic
+    triggerAvatarComment('success', text);
+  };
+
+  const triggerAvatarComment = (type: 'success' | 'failure' | 'neutral', event?: string) => {
+    const p = selectedAvatar.personality;
+    let comment = "";
+
+    const comments = {
+      success: {
+        mean: ["Not bad.", "Keep that up.", "Hmph. Adequate.", "You have some potential."],
+        heroic: ["YES! UNSTOPPABLE!", "THAT'S THE SPIRIT!", "ABSOLUTELY BRILLIANT!", "YOU'RE A NATURAL!"],
+        calm: ["Good focus.", "Harmony in motion.", "Well placed.", "The blade is an extension of you."],
+        sarcastic: ["Impressive, for a rookie.", "I like your style.", "Smooth move.", "Check you out!"]
+      },
+      failure: {
+        mean: ["Pathetic.", "My eyes hurt watching you.", "Leave the dojo.", "Waste of time."],
+        heroic: ["NOOOO!", "WAKE UP!", "THAT WAS TERRIBLE!", "FOCUS, NINJA, FOCUS!"],
+        calm: ["Your mind is wandering.", "Focus is required.", "Breathe... you're off-balance.", "Sloppy."],
+        sarcastic: ["Yikes.", "Was that a slice or a tickle?", "Maybe try closing your eyes next time?", "Embarrassing."]
+      }
+    };
+
+    if (type === 'success') {
+      const list = comments.success[p as keyof typeof comments.success];
+      // If it's a big event like a combo, use a specific one or the first one
+      if (event?.includes('COMBO')) {
+        comment = p === 'mean' ? "A decent combo. Finally." : 
+                  p === 'heroic' ? "WHAT A COMBO!!! LEGENDARY!" : 
+                  p === 'calm' ? "Excellent flow. Triple strike." :
+                  "Triple threat! Look at you go.";
+      } else {
+        comment = list[Math.floor(Math.random() * list.length)];
+      }
+    } else if (type === 'failure') {
+      const list = comments.failure[p as keyof typeof comments.failure];
+      if (event?.includes('BOMB')) {
+        comment = p === 'mean' ? "BOOM. You're a disgrace." :
+                  p === 'heroic' ? "WATCH THE BOMBS!! NOOO!" :
+                  p === 'calm' ? "You let your guards down. Distraction." :
+                  "Boom. Well, that's one way to end a career.";
+      } else {
+        comment = list[Math.floor(Math.random() * list.length)];
+      }
+    }
+
+    if (comment) {
+      setAvatarComment(comment);
+      if (commentTimeoutRef.current) clearTimeout(commentTimeoutRef.current);
+      commentTimeoutRef.current = setTimeout(() => setAvatarComment(""), 3000);
+    }
+  };
+
+  const handleMiss = () => {
+    consecutiveSlicesRef.current = 0;
+    triggerAvatarComment('failure', 'MISS');
   };
 
   const addSplat = (x: number, y: number, color: string) => {
@@ -352,11 +472,20 @@ const NinjaGame: React.FC = () => {
     // B. Clear & Update Canvas
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-    // Dynamic Background Gradient (shifts with level)
-    const hue = (200 + levelRef.current * 20) % 360;
-    const grad = ctx.createRadialGradient(canvas.width / 2, canvas.height / 2, 0, canvas.width / 2, canvas.height / 2, canvas.width);
-    grad.addColorStop(0, `hsla(${hue}, 40%, 10%, 1)`);
-    grad.addColorStop(1, `hsla(${hue}, 40%, 5%, 1)`);
+    // Dynamic Background Gradient (shifts with region)
+    const regionIdx = Math.min(Math.floor((levelRef.current - 1) / 2), REGIONS.length - 1);
+    const region = REGIONS[regionIdx];
+    
+    const grad = ctx.createRadialGradient(
+      canvas.width / 2, 
+      canvas.height / 2, 
+      0, 
+      canvas.width / 2, 
+      canvas.height / 2, 
+      canvas.width
+    );
+    grad.addColorStop(0, region.colors[0]);
+    grad.addColorStop(1, region.colors[1]);
     ctx.fillStyle = grad;
     ctx.fillRect(0, 0, canvas.width, canvas.height);
 
@@ -421,6 +550,7 @@ const NinjaGame: React.FC = () => {
         if (gameStateRef.current !== 'playing') break;
 
         const fruit = fruitsRef.current[i];
+        if (!fruit) continue;
         
         // Apply Gravity with timeScale
         fruit.vy += GRAVITY * timeScaleRef.current;
@@ -435,6 +565,9 @@ const NinjaGame: React.FC = () => {
 
         // Remove if off screen
         if (fruit.y > canvas.height + 100) {
+          if (fruit.type === 'fruit' && !fruit.sliced) {
+            handleMiss();
+          }
           fruitsRef.current.splice(i, 1);
           continue;
         }
@@ -467,6 +600,11 @@ const NinjaGame: React.FC = () => {
               scoreRef.current += 10;
               setScore(scoreRef.current);
               
+              consecutiveSlicesRef.current++;
+              if (consecutiveSlicesRef.current % 5 === 0) {
+                triggerAvatarComment('success', 'SLICE');
+              }
+              
               // Combo Logic
               comboRef.current++;
               if (comboResetTimerRef.current) clearTimeout(comboResetTimerRef.current);
@@ -487,13 +625,17 @@ const NinjaGame: React.FC = () => {
               if (fruit.type === 'slowmo') {
                 timeScaleRef.current = 0.4;
                 addNotification(canvas.width / 2, canvas.height / 2, 'SLOW MO!', '#00ffff');
-                setTimeout(() => { timeScaleRef.current = 1.0; }, 5000);
+                setTimeout(() => { 
+                  timeScaleRef.current = 1.0; 
+                }, 5000);
               } else if (fruit.type === 'frenzy') {
                 addNotification(canvas.width / 2, canvas.height / 2, 'FRENZY!', '#ff4400');
                 const frenzyTimer = setInterval(() => {
                   spawnFruit(canvas.width, canvas.height);
                 }, 150);
-                setTimeout(() => clearInterval(frenzyTimer), 3000);
+                setTimeout(() => {
+                  clearInterval(frenzyTimer);
+                }, 3000);
               } else if (fruit.type === 'shield') {
                 hasShieldRef.current = true;
                 addNotification(fruit.x, fruit.y, 'SHIELD ON!', '#4ade80');
@@ -526,6 +668,7 @@ const NinjaGame: React.FC = () => {
       // Iterate backwards to allow removal
       for (let i = particlesRef.current.length - 1; i >= 0; i--) {
         const p = particlesRef.current[i];
+        if (!p) continue;
         p.x += p.vx * timeScaleRef.current;
         p.y += p.vy * timeScaleRef.current;
         p.vy += (GRAVITY * 0.5) * timeScaleRef.current;
@@ -622,6 +765,9 @@ const NinjaGame: React.FC = () => {
     particlesRef.current = [];
     frameCountRef.current = 0;
     bladePathRef.current = [];
+    timeScaleRef.current = 1.0;
+    hasShieldRef.current = false;
+    consecutiveSlicesRef.current = 0;
     
     // Resize Canvas to Match Window
     if (canvasRef.current) {
@@ -663,6 +809,9 @@ const NinjaGame: React.FC = () => {
     setShowLevelUp(true);
     setCountdown(3);
     
+    // Avatar Commentary
+    triggerAvatarComment('success', 'LEVEL_UP');
+
     // Get AI sensei commentary
     getSenseiCommentary({ 
         score: scoreRef.current, 
@@ -718,6 +867,9 @@ const NinjaGame: React.FC = () => {
     if (requestRef.current) cancelAnimationFrame(requestRef.current);
     if (timerRef.current) clearInterval(timerRef.current);
 
+    // Avatar Final Commentary
+    triggerAvatarComment('failure', 'BOMB');
+
     // AI Commentary
     getSenseiCommentary({ 
         score: scoreRef.current, 
@@ -760,30 +912,88 @@ const NinjaGame: React.FC = () => {
 
       <h1 className="text-6xl font-bold mb-8 text-green-400 drop-shadow-[0_0_10px_rgba(74,222,128,0.8)] animate-pulse mt-8">NINJA HANDS</h1>
       
+      {/* Avatar Selection */}
+      <div className="w-full max-w-lg mb-8">
+        <h3 className="text-center text-slate-400 font-black uppercase tracking-[0.3em] text-xs mb-4">Choose Your Sensei</h3>
+        <div className="grid grid-cols-4 gap-4">
+          {AVATARS.map((avatar) => (
+            <button
+              key={avatar.id}
+              onClick={() => setSelectedAvatar(avatar)}
+              className={`
+                flex flex-col items-center gap-2 p-4 rounded-2xl border-2 transition-all group
+                ${selectedAvatar.id === avatar.id 
+                  ? `${avatar.color} border-current scale-105 shadow-lg` 
+                  : 'bg-slate-900 border-transparent hover:bg-slate-800'}
+              `}
+            >
+              <span className="text-4xl group-hover:scale-110 transition-transform">{avatar.emoji}</span>
+              <span className={`text-[10px] font-black uppercase tracking-tighter ${selectedAvatar.id === avatar.id ? 'text-white' : 'text-slate-500'}`}>
+                {avatar.name}
+              </span>
+            </button>
+          ))}
+        </div>
+        <p className="text-center text-[10px] text-slate-600 mt-4 italic">
+          {selectedAvatar.personality === 'mean' && "Shadow will not be impressed easily."}
+          {selectedAvatar.personality === 'heroic' && "Spark will cheer you to greatness!"}
+          {selectedAvatar.personality === 'calm' && "Zen brings focus to the chaos."}
+          {selectedAvatar.personality === 'sarcastic' && "Rogue has seen better ninjas."}
+        </p>
+      </div>
+
       <div className="bg-slate-900 border border-green-500/50 p-6 rounded-2xl mb-8 w-full max-w-sm drop-shadow-[0_0_5px_rgba(74,222,128,0.5)]">
         <h3 className="text-xl font-black mb-4 text-center uppercase tracking-widest text-green-500">Leaderboard</h3>
         <div className="space-y-2 text-sm">
-          <div className="flex justify-between border-b border-green-500/20 pb-1"><span>NinjaMaster</span><span className="font-mono text-green-400">5000</span></div>
-          <div className="flex justify-between border-b border-green-500/20 pb-1"><span>Slasher</span><span className="font-mono text-green-400">4200</span></div>
-          <div className="flex justify-between border-b border-green-500/20 pb-1"><span>Sensei</span><span className="font-mono text-green-400">3800</span></div>
+          {leaderboard.length > 0 ? (
+            leaderboard.map((entry, idx) => (
+              <div key={idx} className="flex justify-between border-b border-green-500/20 pb-1">
+                <span>{entry.displayName}</span>
+                <span className="font-mono text-green-400">{entry.score}</span>
+              </div>
+            ))
+          ) : (
+            <div className="text-center text-slate-500 italic">No scores yet...</div>
+          )}
         </div>
       </div>
 
-      <input 
-        type="text" 
-        placeholder="Enter guest name" 
-        className="bg-slate-900 border border-green-500/50 p-3 rounded mb-4 text-center outline-none focus:border-green-400 w-full max-w-xs" 
-        value={guestName}
-        onChange={(e) => setGuestName(e.target.value)}
-      />
-
-      <button 
-        onClick={() => signInWithGoogle()} 
-        className="flex items-center gap-2 bg-white text-black px-6 py-2 rounded font-bold mb-8 hover:bg-slate-200 transition-colors"
-      >
-        <LogIn className="w-5 h-5" />
-        Sign in with Google
-      </button>
+      {!user ? (
+        <div className="flex flex-col items-center gap-4 mb-8">
+          <input 
+            type="text" 
+            placeholder="Enter guest name" 
+            className="bg-slate-900 border border-green-500/50 p-3 rounded text-center outline-none focus:border-green-400 w-full max-w-xs" 
+            value={guestName}
+            onChange={(e) => setGuestName(e.target.value)}
+          />
+          <button 
+            onClick={() => signInWithGoogle()} 
+            className="flex items-center gap-2 bg-white text-black px-6 py-2 rounded font-bold hover:bg-slate-200 transition-colors"
+          >
+            <LogIn className="w-5 h-5" />
+            Sign in with Google
+          </button>
+        </div>
+      ) : (
+        <div className="flex items-center gap-4 bg-slate-900/80 p-4 rounded-xl border border-green-500/30 mb-8 max-w-xs w-full">
+          <img 
+            src={user.photoURL || `https://ui-avatars.com/api/?name=${user.displayName}`} 
+            alt="User" 
+            className="w-12 h-12 rounded-full border-2 border-green-500"
+            referrerPolicy="no-referrer"
+          />
+          <div className="flex flex-col flex-1 overflow-hidden">
+            <span className="font-bold text-green-400 truncate">{user.displayName}</span>
+            <button 
+              onClick={() => auth.signOut()}
+              className="text-slate-500 text-xs text-left hover:text-red-400 font-bold uppercase tracking-widest"
+            >
+              Sign Out
+            </button>
+          </div>
+        </div>
+      )}
 
       <button 
         onClick={() => handleEnableCamera()} 
@@ -822,8 +1032,44 @@ const NinjaGame: React.FC = () => {
       {/* HUD (Heads Up Display) */}
       {(gameState === 'playing' || gameState === 'gameover') && (
         <div className="absolute top-0 left-0 w-full p-6 flex justify-between items-start z-30 pointer-events-none">
-          <div className="flex gap-8">
-            <div className="flex flex-col">
+          <div className="flex gap-8 items-center">
+            {/* Avatar Corner */}
+            <div className="flex items-center gap-4 relative">
+               <div className={`
+                 w-20 h-20 rounded-2xl border-2 flex items-center justify-center text-4xl shadow-2xl relative
+                 ${selectedAvatar.color}
+               `}>
+                 {selectedAvatar.emoji}
+                 {/* Talking Bubble */}
+                 <AnimatePresence>
+                   {avatarComment && (
+                     <motion.div 
+                       initial={{ opacity: 0, x: -10, scale: 0.8 }}
+                       animate={{ opacity: 1, x: 0, scale: 1 }}
+                       exit={{ opacity: 0, scale: 0.8 }}
+                       className="absolute left-full ml-4 top-0 bg-white text-slate-900 p-3 rounded-2xl rounded-tl-none font-bold text-sm w-48 shadow-xl z-[60]"
+                     >
+                        <div className="absolute -left-2 top-0 w-0 h-0 border-t-8 border-t-white border-l-8 border-l-transparent" />
+                        {avatarComment}
+                     </motion.div>
+                   )}
+                 </AnimatePresence>
+               </div>
+               <div className="flex flex-col">
+                  <span className="text-white font-black italic text-xl tracking-tighter leading-none">{selectedAvatar.name}</span>
+                  <span className="text-white/40 text-[10px] font-black uppercase tracking-widest">{selectedAvatar.personality} sensei</span>
+               </div>
+            </div>
+
+            {/* Region HUD */}
+            <div className="flex flex-col ml-8">
+              <span className="text-white/30 text-[10px] font-black uppercase tracking-widest leading-none mb-1">Region</span>
+              <span className={`font-black italic text-2xl tracking-tighter ${REGIONS[Math.min(Math.floor((currentLevel - 1) / 2), REGIONS.length - 1)].accent}`}>
+                {REGIONS[Math.min(Math.floor((currentLevel - 1) / 2), REGIONS.length - 1)].name}
+              </span>
+            </div>
+
+            <div className="flex flex-col ml-8">
               <span className="text-yellow-400 font-black text-4xl drop-shadow-md">
                 {score}
               </span>
@@ -884,11 +1130,21 @@ const NinjaGame: React.FC = () => {
       {showLevelUp && (
         <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/60 z-40 backdrop-blur-md animate-in fade-in duration-500">
           <div className="text-center px-4 max-w-2xl">
-            <h2 className="text-7xl font-black text-white mb-4 tracking-tighter drop-shadow-2xl">
+            <h2 className="text-7xl font-black text-white mb-2 tracking-tighter drop-shadow-2xl">
               LEVEL UP!
             </h2>
-            <div className="h-1 w-64 bg-cyan-500 mx-auto mb-8 rounded-full shadow-[0_0_15px_rgba(34,211,238,0.8)]" />
+            <div className="h-1 w-64 bg-cyan-500 mx-auto mb-6 rounded-full shadow-[0_0_15px_rgba(34,211,238,0.8)]" />
             
+            {/* Region Discover Notification */}
+            {currentLevel % 2 === 1 && currentLevel > 1 && (
+               <div className="mb-6 animate-in zoom-in duration-500">
+                  <p className="text-white/40 text-xs font-bold uppercase tracking-[0.4em] mb-1">New Region Discovered</p>
+                  <p className={`text-4xl font-black italic tracking-tighter drop-shadow-xl ${REGIONS[Math.min(Math.floor((currentLevel - 1) / 2), REGIONS.length - 1)].accent}`}>
+                    {REGIONS[Math.min(Math.floor((currentLevel - 1) / 2), REGIONS.length - 1)].name}
+                  </p>
+               </div>
+            )}
+
             {senseiComment && (
                <div className="mb-10 animate-in slide-in-from-bottom duration-700">
                   <p className="text-2xl text-cyan-300 font-serif italic mb-2">" {senseiComment} "</p>

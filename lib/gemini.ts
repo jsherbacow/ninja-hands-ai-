@@ -31,7 +31,16 @@ export const getSenseiCommentary = async (stats: GameStats): Promise<string> => 
     });
 
     return response.text?.trim() || "The blade must be one with the hand.";
-  } catch (error) {
+  } catch (error: any) {
+    // Robustly check for 503 (Service Unavailable) across different SDK error formats
+    const is503 = error?.status === 503 || 
+                  error?.error?.code === 503 || 
+                  error?.message?.includes('503') ||
+                  error?.message?.includes('UNAVAILABLE');
+
+    if (is503) {
+      return "Patience is a virtue. Focus on your inner blade.";
+    }
     console.error("Error getting Sensei commentary:", error);
     return "The blade must be one with the hand.";
   }
