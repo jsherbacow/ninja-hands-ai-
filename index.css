@@ -1,0 +1,22 @@
+:root {
+  --color-bg: #0f172a;
+  --color-accent: #22d3ee;
+  --glass-surface: rgba(30, 41, 59, 0.4);
+  --glass-border: rgba(255, 255, 255, 0.1);
+}
+
+.atmosphere {
+  background:
+    radial-gradient(circle at 50% 30%, #1e293b 0%, transparent 60%),
+    radial-gradient(circle at 10% 80%, var(--color-accent) 0%, transparent 50%);
+  filter: blur(60px);
+}
+
+.player-chrome {
+  background: var(--glass-surface);
+  backdrop-filter: blur(30px);
+}
+
+.textShadow {
+  text-shadow: 0 0 10px rgba(255, 255, 255, 0.3);
+}

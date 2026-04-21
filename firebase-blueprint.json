@@ -1,0 +1,37 @@
+{
+  "entities": {
+    "Score": {
+      "title": "Score",
+      "description": "A high score entry for the leaderboard",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "description": "UID of the user" },
+        "displayName": { "type": "string", "description": "Display name of the player" },
+        "score": { "type": "number", "description": "The final score" },
+        "level": { "type": "number", "description": "Reached level" },
+        "timestamp": { "type": "string", "format": "date-time", "description": "When the score was recorded" }
+      },
+      "required": ["userId", "displayName", "score", "level", "timestamp"]
+    },
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "User specific data",
+      "type": "object",
+      "properties": {
+        "displayName": { "type": "string", "description": "Chosen name" },
+        "bestScore": { "type": "number", "description": "Highest score recorded" }
+      },
+      "required": ["displayName"]
+    }
+  },
+  "firestore": {
+    "leaderboard/{scoreId}": {
+      "schema": "Score",
+      "description": "Global leaderboard entries"
+    },
+    "users/{userId}": {
+      "schema": "UserProfile",
+      "description": "User profile data"
+    }
+  }
+}

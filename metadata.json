@@ -1,0 +1,8 @@
+{
+  "name": "Ninja Hands AI",
+  "description": "A Fruit Ninja-style game controlled by hand gestures using your webcam.",
+  "requestFramePermissions": [
+    "camera"
+  ],
+  "majorCapabilities": []
+}
