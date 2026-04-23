@@ -2,9 +2,9 @@ import React, { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { HandLandmarker } from '@mediapipe/tasks-vision';
 import { createHandLandmarker } from '../utils/handDetection';
-import { Loader2, Camera, Play, RotateCcw, AlertCircle, Trophy, User, LogIn, ArrowLeft, Palmtree, Mountain, Trees, Wind, Sun, Compass } from 'lucide-react';
+import { Loader2, Camera, Play, RotateCcw, AlertCircle, Trophy, User, LogIn, LogOut, ArrowLeft, Palmtree, Mountain, Trees, Wind, Sun, Compass, AlertTriangle, X } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import { auth, signInWithGoogle, submitScore, getTopScores, LeaderboardEntry } from '../lib/firebase';
+import { auth, signInWithGoogle, signOut, submitScore, getTopScores, LeaderboardEntry } from '../lib/firebase';
 import { getSenseiCommentary } from '../lib/gemini';
 import { User as FirebaseUser } from 'firebase/auth';
 
@@ -995,6 +995,32 @@ const NinjaGame: React.FC = () => {
     setIsPaused(prev => !prev);
   };
 
+  const handleSignIn = async () => {
+    try {
+      setErrorMessage(null);
+      await signInWithGoogle();
+    } catch (error: any) {
+      console.error("Sign in failed:", error);
+      if (error.code === 'auth/popup-blocked') {
+        setErrorMessage("Sign-in popup was blocked by your browser. Please allow popups for this site.");
+      } else if (error.code === 'auth/unauthorized-domain') {
+        setErrorMessage(`Authorization Error: The domain '${window.location.hostname}' is not authorized in your Firebase Project. Please add it to 'Authorized domains' in the Firebase Console.`);
+      } else {
+        setErrorMessage("Failed to sign in with Google: " + (error.message || "Unknown error"));
+      }
+    }
+  };
+
+  const handleSignOut = async () => {
+    try {
+      setErrorMessage(null);
+      await signOut();
+    } catch (error: any) {
+      console.error("Sign out failed:", error);
+      setErrorMessage("Failed to sign out: " + (error.message || "Unknown error"));
+    }
+  };
+
   const startLevelTransition = async () => {
     isTransitioningRef.current = true;
 
@@ -1198,7 +1224,7 @@ const NinjaGame: React.FC = () => {
             onChange={(e) => setGuestName(e.target.value)}
           />
           <button 
-            onClick={() => signInWithGoogle()} 
+            onClick={handleSignIn} 
             className="flex items-center gap-2 bg-white text-black px-6 py-2 rounded font-bold hover:bg-slate-200 transition-colors"
           >
             <LogIn className="w-5 h-5" />
@@ -1216,9 +1242,10 @@ const NinjaGame: React.FC = () => {
           <div className="flex flex-col flex-1 overflow-hidden">
             <span className="font-bold text-green-400 truncate">{user.displayName}</span>
             <button 
-              onClick={() => auth.signOut()}
-              className="text-slate-500 text-xs text-left hover:text-red-400 font-bold uppercase tracking-widest"
+              onClick={handleSignOut}
+              className="text-slate-500 text-xs text-left hover:text-red-400 font-bold uppercase tracking-widest flex items-center gap-1"
             >
+              <LogOut className="w-3 h-3" />
               Sign Out
             </button>
           </div>
@@ -1250,6 +1277,29 @@ const NinjaGame: React.FC = () => {
         playsInline 
         muted
       />
+
+      {/* Error Message Top Display */}
+      <AnimatePresence>
+        {errorMessage && (
+          <motion.div 
+            initial={{ opacity: 0, y: -50 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -50 }}
+            className="absolute top-4 left-1/2 -translate-x-1/2 z-[300] bg-red-600/90 text-white px-8 py-4 rounded-2xl shadow-2xl backdrop-blur-md border border-white/20 max-w-lg w-[90%] flex items-center gap-4"
+          >
+            <div className="bg-white/20 p-2 rounded-full">
+              <AlertTriangle className="w-6 h-6 text-white" />
+            </div>
+            <div className="flex-1">
+              <h4 className="font-black text-sm uppercase tracking-wider mb-1">System Error</h4>
+              <p className="text-sm font-medium leading-tight">{errorMessage}</p>
+            </div>
+            <button onClick={() => setErrorMessage(null)} className="hover:bg-white/20 p-2 rounded-full transition-colors">
+              <X className="w-5 h-5" />
+            </button>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* Game Canvas */}
       <canvas 
@@ -1647,7 +1697,7 @@ const NinjaGame: React.FC = () => {
 
                   {!user && (
                     <button 
-                      onClick={signInWithGoogle}
+                      onClick={handleSignIn}
                       className="flex items-center justify-center gap-3 px-8 py-5 bg-white/5 hover:bg-white/10 text-white border border-white/20 rounded-full font-bold text-lg backdrop-blur-sm transition-all"
                     >
                       <LogIn className="w-6 h-6" />
@@ -1662,6 +1712,13 @@ const NinjaGame: React.FC = () => {
                       <User className="text-cyan-400 w-5 h-5" />
                    </div>
                    <p className="text-slate-300 font-medium">Logged in as <span className="text-white font-bold">{user.displayName}</span></p>
+                   <button 
+                    onClick={handleSignOut}
+                    className="ml-2 p-2 hover:bg-white/10 text-slate-400 hover:text-white rounded-lg transition-colors cursor-pointer"
+                    title="Sign Out"
+                   >
+                     <LogOut className="w-4 h-4" />
+                   </button>
                 </div>
               )}
             </div>
