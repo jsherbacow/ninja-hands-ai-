@@ -1935,23 +1935,15 @@ const NinjaGame: React.FC = () => {
               initial={{ scale: 0, rotate: -20 }}
               animate={{ scale: 1, rotate: 0 }}
               transition={{ type: 'spring', damping: 10, stiffness: 100 }}
-              className="relative mb-12"
+              className="relative mb-12 flex items-center justify-center"
             >
-              <div className="absolute inset-0 blur-3xl opacity-30 animate-pulse bg-white rounded-full scale-150" />
-              {transitionRegion.name === "Zen Orchard" && <Trees className="w-56 h-56 text-emerald-400 relative z-10 drop-shadow-[0_0_20px_rgba(52,211,153,0.5)]" />}
-              {transitionRegion.name === "Tropical Bay" && (
-                <div className="relative z-10 flex flex-col items-center">
-                  <Palmtree className="w-56 h-56 text-blue-400 drop-shadow-[0_0_30px_rgba(96,165,250,0.6)]" />
-                  <span className="text-8xl absolute -bottom-4 -right-4">🏝️</span>
-                </div>
-              )}
-              {transitionRegion.name === "Shadow Peaks" && <Mountain className="w-56 h-56 text-purple-400 relative z-10 drop-shadow-[0_0_30px_rgba(192,132,252,0.6)]" />}
-              {transitionRegion.name === "Imperial Harvest" && (
-                <div className="relative z-10 flex flex-col items-center">
-                  <Sun className="w-56 h-56 text-orange-400 drop-shadow-[0_0_30px_rgba(251,146,60,0.6)]" />
-                  <span className="text-8xl absolute -bottom-4 -left-4">⛩️</span>
-                </div>
-              )}
+              <div className="absolute inset-0 blur-3xl opacity-20 animate-pulse bg-white rounded-full scale-150" />
+              <span className="text-9xl relative z-10 drop-shadow-2xl">
+                {transitionRegion.name === "Zen Orchard" && '🌳'}
+                {transitionRegion.name === "Tropical Bay" && '🏝️'}
+                {transitionRegion.name === "Shadow Peaks" && '⛰️'}
+                {transitionRegion.name === "Imperial Harvest" && '⛩️'}
+              </span>
             </motion.div>
 
             <div className="relative">
@@ -1986,18 +1978,15 @@ const NinjaGame: React.FC = () => {
               </div>
             </div>
 
-            {/* Decorative Wind/Aura */}
+            {/* Decorative Wind/Aura (Subtle Glow) */}
             <motion.div
               animate={{ 
-                x: [-50, 50, -50],
-                y: [-20, 20, -20],
-                opacity: [0.1, 0.3, 0.1]
+                scale: [1, 1.2, 1],
+                opacity: [0.1, 0.2, 0.1]
               }}
               transition={{ duration: 4, repeat: Infinity }}
-              className="absolute top-1/4 right-1/4 pointer-events-none"
-            >
-              <Wind className="w-32 h-32 text-white/10" />
-            </motion.div>
+              className="absolute top-1/4 right-1/4 pointer-events-none w-64 h-64 bg-white/5 blur-3xl rounded-full"
+            />
           </motion.div>
         )}
       </AnimatePresence>

@@ -1,11 +1,28 @@
 import { initializeApp } from 'firebase/app';
 import { getAuth, GoogleAuthProvider, signInWithPopup, signOut as firebaseSignOut } from 'firebase/auth';
-import { getFirestore, collection, addDoc, query, orderBy, limit, getDocs, serverTimestamp } from 'firebase/firestore';
+import { getFirestore, collection, addDoc, query, orderBy, limit, getDocs, serverTimestamp, doc, getDocFromServer } from 'firebase/firestore';
 import firebaseConfig from '../firebase-applet-config.json';
 
 const app = initializeApp(firebaseConfig);
 export const auth = getAuth(app);
 export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
+
+// Test Connection
+async function testConnection() {
+  try {
+    // Attempt to fetch a non-existent doc from server to verify connectivity
+    await getDocFromServer(doc(db, 'system', 'connection_test'));
+    console.log("Firestore connection verified.");
+  } catch (error) {
+    if (error instanceof Error && error.message.includes('offline')) {
+      console.error("Firestore is offline. Please check your Firebase configuration or connectivity.");
+    } else {
+      console.warn("Firestore connectivity test returned an expected status or error:", error);
+    }
+  }
+}
+testConnection();
+
 export const googleProvider = new GoogleAuthProvider();
 
 export const signInWithGoogle = async () => {
