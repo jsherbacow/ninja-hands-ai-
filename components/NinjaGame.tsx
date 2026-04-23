@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { HandLandmarker } from '@mediapipe/tasks-vision';
 import { createHandLandmarker } from '../utils/handDetection';
-import { Loader2, Camera, Play, RotateCcw, AlertCircle, Trophy, User, LogIn, LogOut, ArrowLeft, Palmtree, Mountain, Trees, Wind, Sun, Compass, AlertTriangle, X } from 'lucide-react';
+import { Loader2, Camera, Play, RotateCcw, AlertCircle, Trophy, User, LogIn, LogOut, ArrowLeft, AlertTriangle, X } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { auth, signInWithGoogle, signOut, submitScore, getTopScores, LeaderboardEntry } from '../lib/firebase';
 import { getSenseiCommentary } from '../lib/gemini';
@@ -50,6 +50,7 @@ interface Particle {
   size: number;
   angle: number;
   rotationSpeed: number;
+  gravityMult?: number;
 }
 
 interface Splat {
@@ -66,6 +67,13 @@ interface Avatar {
   emoji: string;
   color: string;
   personality: 'mean' | 'heroic' | 'calm' | 'sarcastic';
+}
+
+interface Blade {
+  id: string;
+  name: string;
+  emoji: string;
+  color: string;
 }
 
 interface Region {
@@ -110,6 +118,13 @@ const AVATARS: Avatar[] = [
   { id: 'rogue', name: 'Rogue', emoji: '😼', color: 'border-purple-500 bg-purple-900/20', personality: 'sarcastic' }
 ];
 
+const BLADES: Blade[] = [
+  { id: 'sword', name: 'Katana', emoji: '🗡️', color: 'border-zinc-500 bg-zinc-900/40' },
+  { id: 'star', name: 'Shuriken', emoji: '💠', color: 'border-cyan-500 bg-cyan-900/40' },
+  { id: 'dragon', name: 'Dragon', emoji: '🐉', color: 'border-emerald-600 bg-emerald-900/40' },
+  { id: 'funny', name: 'Baguette', emoji: '🥖', color: 'border-amber-600 bg-amber-900/40' }
+];
+
 const FRUIT_COLORS: Record<string, string> = {
   '🍎': '#ff4444', '🍏': '#a3e635', '🍌': '#facc15', '🍐': '#bef264', '🍊': '#fb923c', '🍓': '#f43f5e',
   '🍍': '#fef08a', '🥥': '#f8fafc', '🥭': '#fbbf24', '🥝': '#84cc16', '🍉': '#ef4444', '🍋': '#fde047',
@@ -146,6 +161,7 @@ const NinjaGame: React.FC = () => {
   const [guestName, setGuestName] = useState("");
   const [isInitializing, setIsInitializing] = useState(false);
   const [selectedAvatar, setSelectedAvatar] = useState<Avatar>(AVATARS[0]);
+  const [selectedBlade, setSelectedBlade] = useState<Blade>(BLADES[0]);
   const [avatarComment, setAvatarComment] = useState<string>("Ready, Ninja?");
   const [showRegionCutscene, setShowRegionCutscene] = useState(false);
   const [showBombExplosion, setShowBombExplosion] = useState(false);
@@ -178,6 +194,9 @@ const NinjaGame: React.FC = () => {
   const hasShieldRef = useRef(false);
   const notificationsRef = useRef<Notification[]>([]);
   const splatsRef = useRef<Splat[]>([]);
+  const handAngleRef = useRef(0);
+  const isHandVisibleRef = useRef(false);
+  const handPosRef = useRef<Point>({ x: -1, y: -1 });
   const cachedGradientRef = useRef<CanvasGradient | null>(null);
   const lastVideoTimeRef = useRef(-1);
   const shakeRef = useRef(0);
@@ -326,7 +345,8 @@ const NinjaGame: React.FC = () => {
         color,
         size: Math.random() * 6 + 2,
         angle: Math.random() * Math.PI * 2,
-        rotationSpeed: (Math.random() - 0.5) * 0.2
+        rotationSpeed: (Math.random() - 0.5) * 0.2,
+        gravityMult: 1.0
       });
     }
     shakeRef.current = 15;
@@ -357,7 +377,8 @@ const NinjaGame: React.FC = () => {
         color,
         size: Math.random() * 4 + 2,
         angle: Math.random() * Math.PI * 2,
-        rotationSpeed: (Math.random() - 0.5) * 0.05
+        rotationSpeed: (Math.random() - 0.5) * 0.05,
+        gravityMult: 0.1 // Environment particles float more
     });
   };
 
@@ -377,7 +398,8 @@ const NinjaGame: React.FC = () => {
             color,
             size: Math.random() * 5 + 1,
             angle: Math.random() * Math.PI * 2,
-            rotationSpeed: (Math.random() - 0.5) * 0.3
+            rotationSpeed: (Math.random() - 0.5) * 0.3,
+            gravityMult: 1.0
         });
     }
     // Small flash at slice location
@@ -410,6 +432,46 @@ const NinjaGame: React.FC = () => {
     triggerAvatarComment('success', text);
   };
 
+  const spawnBladeParticles = (x: number, y: number) => {
+    // Only spawn a few particles per frame to avoid lag
+    const count = 2;
+    for (let i = 0; i < count; i++) {
+        let color = '#fff';
+        let size = 2;
+        let vx = (Math.random() - 0.5) * 4;
+        let vy = (Math.random() - 0.5) * 4;
+        let life = 0.3 + Math.random() * 0.3;
+        let gravityMult = 0.5;
+
+        if (selectedBlade.id === 'star') {
+            color = Math.random() > 0.5 ? '#22d3ee' : '#fff';
+            size = 3;
+        } else if (selectedBlade.id === 'dragon') {
+            color = ['#f97316', '#ef4444', '#facc15'][Math.floor(Math.random() * 3)];
+            size = Math.random() * 6 + 2;
+            vy = -Math.random() * 5 - 2; // Flame rises
+            gravityMult = -0.2; // Rises naturally
+            life = 0.4 + Math.random() * 0.4;
+        } else if (selectedBlade.id === 'funny') {
+            color = ['#b45309', '#d97706', '#fcd34d'][Math.floor(Math.random() * 3)];
+            size = Math.random() * 4 + 1;
+            vy = Math.random() * 3 + 1; // Falling crumbs
+            vx = (Math.random() - 0.5) * 2;
+            gravityMult = 1.0;
+        }
+
+        particlesRef.current.push({
+            id: Math.random(),
+            x: x + (Math.random() - 0.5) * 10,
+            y: y + (Math.random() - 0.5) * 10,
+            vx, vy, life, color, size,
+            angle: Math.random() * Math.PI * 2,
+            rotationSpeed: (Math.random() - 0.5) * 0.2,
+            gravityMult
+        });
+    }
+  };
+
   const triggerAvatarComment = (type: 'success' | 'failure' | 'neutral', event?: string) => {
     const p = selectedAvatar.personality;
     let comment = "";
@@ -431,7 +493,6 @@ const NinjaGame: React.FC = () => {
 
     if (type === 'success') {
       const list = comments.success[p as keyof typeof comments.success];
-      // If it's a big event like a combo, use a specific one or the first one
       if (event?.includes('COMBO')) {
         comment = p === 'mean' ? "A decent combo. Finally." : 
                   p === 'heroic' ? "WHAT A COMBO!!! LEGENDARY!" : 
@@ -535,21 +596,34 @@ const NinjaGame: React.FC = () => {
             const results = landmarker.detectForVideo(video, startTimeMs);
             
             if (results.landmarks && results.landmarks.length > 0) {
-              // Get Index Finger Tip (Landmark 8)
+              isHandVisibleRef.current = true;
+              // Get Index Finger Tip (Landmark 8) and Base (Landmark 5)
               const hand = results.landmarks[0];
               const indexTip = hand[8];
+              const indexBase = hand[5];
               
               // Convert normalized coordinates (0-1) to canvas coordinates using cover scale
               // Ensure we mirror it if the video feed is mirrored
               handX = drawX + (1 - indexTip.x) * drawW;
               handY = drawY + indexTip.y * drawH;
 
+              const baseX = drawX + (1 - indexBase.x) * drawW;
+              const baseY = drawY + indexBase.y * drawH;
+
+              // Calculate angle of the finger
+              handAngleRef.current = Math.atan2(handY - baseY, handX - baseX) + Math.PI / 2;
+              handPosRef.current = { x: handX, y: handY };
+
               // Update Blade Path
               bladePathRef.current.push({ x: handX, y: handY });
               if (bladePathRef.current.length > BLADE_LENGTH) {
                 bladePathRef.current.shift();
               }
+
+              // Spawn Custom Blade Particles
+              spawnBladeParticles(handX, handY);
             } else {
+              isHandVisibleRef.current = false;
               // If no hand, shorten path gradually
               if (bladePathRef.current.length > 0) bladePathRef.current.shift();
             }
@@ -838,7 +912,7 @@ const NinjaGame: React.FC = () => {
         if (!p) continue;
         p.x += p.vx * timeScaleRef.current;
         p.y += p.vy * timeScaleRef.current;
-        p.vy += (GRAVITY * 0.5) * timeScaleRef.current;
+        p.vy += (GRAVITY * 0.5 * (p.gravityMult ?? 1.0)) * timeScaleRef.current;
         p.life -= 0.02 * timeScaleRef.current;
 
         if (p.life <= 0) {
@@ -930,12 +1004,196 @@ const NinjaGame: React.FC = () => {
       ctx.restore();
     }
 
+    // H. Draw Visual Blade
+    if (isHandVisibleRef.current && currentState === 'playing' && !isPausedRef.current) {
+        drawBlade(ctx, handPosRef.current.x, handPosRef.current.y, handAngleRef.current);
+    }
+
     if (shakeRef.current > 0) {
         ctx.restore();
     }
   };
 
   // 4. Game Control Functions
+  const drawBlade = (ctx: CanvasRenderingContext2D, x: number, y: number, angle: number) => {
+    switch (selectedBlade.id) {
+      case 'star': drawShuriken(ctx, x, y); break;
+      case 'dragon': drawDragonBlade(ctx, x, y, angle); break;
+      case 'funny': drawBaguette(ctx, x, y, angle); break;
+      default: drawKatana(ctx, x, y, angle);
+    }
+  };
+
+  const drawKatana = (ctx: CanvasRenderingContext2D, x: number, y: number, angle: number) => {
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.rotate(angle);
+    ctx.scale(0.8, 0.8);
+
+    // 1. Blade
+    ctx.beginPath();
+    ctx.moveTo(0, 0);
+    ctx.quadraticCurveTo(5, 100, 10, 250);
+    ctx.lineTo(-10, 250);
+    ctx.quadraticCurveTo(-5, 100, 0, 0);
+    ctx.closePath();
+
+    const bladeGrad = ctx.createLinearGradient(-10, 0, 10, 0);
+    bladeGrad.addColorStop(0, '#71717a');
+    bladeGrad.addColorStop(0.3, '#f4f4f5');
+    bladeGrad.addColorStop(0.7, '#a1a1aa');
+    ctx.fillStyle = bladeGrad;
+    ctx.fill();
+
+    // Edge
+    ctx.strokeStyle = '#fff';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(-2, 0);
+    ctx.quadraticCurveTo(-5, 100, -8, 250);
+    ctx.stroke();
+
+    // Guard
+    ctx.beginPath();
+    ctx.ellipse(0, 250, 30, 15, 0, 0, Math.PI * 2);
+    ctx.fillStyle = '#09090b';
+    ctx.fill();
+    ctx.strokeStyle = '#d4d4d8';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+
+    // Handle
+    ctx.fillStyle = '#450606';
+    ctx.beginPath();
+    ctx.roundRect(-12, 250, 24, 80, 5);
+    ctx.fill();
+
+    // Wrap
+    ctx.strokeStyle = '#09090b';
+    ctx.lineWidth = 2;
+    for (let i = 260; i < 330; i += 12) {
+      ctx.beginPath();
+      ctx.moveTo(-12, i); ctx.lineTo(12, i + 10); ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(12, i); ctx.lineTo(-12, i + 10); ctx.stroke();
+    }
+
+    // Polish Glow
+    ctx.globalAlpha = 0.2;
+    ctx.fillStyle = 'cyan';
+    ctx.beginPath();
+    ctx.ellipse(0, 100, 20, 150, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  };
+
+  const drawShuriken = (ctx: CanvasRenderingContext2D, x: number, y: number) => {
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.rotate(frameCountRef.current * 0.4);
+    
+    for (let i = 0; i < 4; i++) {
+        ctx.save();
+        ctx.rotate((i * Math.PI) / 2);
+        ctx.beginPath();
+        ctx.moveTo(0, 0);
+        ctx.lineTo(-15, 40);
+        ctx.lineTo(0, 70);
+        ctx.lineTo(15, 40);
+        ctx.closePath();
+
+        const grad = ctx.createLinearGradient(-15, 0, 15, 70);
+        grad.addColorStop(0, '#334155');
+        grad.addColorStop(0.5, '#f8fafc');
+        grad.addColorStop(1, '#64748b');
+        ctx.fillStyle = grad;
+        ctx.fill();
+        ctx.lineWidth = 1;
+        ctx.strokeStyle = '#fff';
+        ctx.stroke();
+        ctx.restore();
+    }
+
+    ctx.beginPath();
+    ctx.arc(0, 0, 10, 0, Math.PI * 2);
+    ctx.fillStyle = '#020617';
+    ctx.fill();
+    ctx.stroke();
+    
+    ctx.globalAlpha = 0.3;
+    ctx.fillStyle = '#22d3ee';
+    ctx.beginPath();
+    ctx.arc(0, 0, 50, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  };
+
+  const drawDragonBlade = (ctx: CanvasRenderingContext2D, x: number, y: number, angle: number) => {
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.rotate(angle);
+    ctx.scale(1.1, 1.1);
+
+    ctx.beginPath();
+    ctx.moveTo(0, 0);
+    ctx.bezierCurveTo(40, 100, 60, 180, 20, 280);
+    ctx.lineTo(-15, 280);
+    ctx.bezierCurveTo(30, 200, 20, 100, 0, 0);
+    ctx.closePath();
+
+    const bladeGrad = ctx.createLinearGradient(0, 0, 40, 280);
+    bladeGrad.addColorStop(0, '#065f46');
+    bladeGrad.addColorStop(0.5, '#34d399');
+    bladeGrad.addColorStop(1, '#064e3b');
+    ctx.fillStyle = bladeGrad;
+    ctx.fill();
+    ctx.strokeStyle = '#6ee7b7';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+
+    ctx.beginPath();
+    ctx.arc(10, 60, 5, 0, Math.PI * 2);
+    ctx.fillStyle = '#fde047';
+    ctx.fill();
+
+    ctx.beginPath();
+    ctx.moveTo(-25, 280);
+    ctx.lineTo(45, 280);
+    ctx.lineTo(10, 310);
+    ctx.closePath();
+    ctx.fillStyle = '#fbbf24';
+    ctx.fill();
+
+    ctx.fillStyle = '#1e293b';
+    ctx.fillRect(-10, 280, 20, 70);
+    ctx.restore();
+  };
+
+  const drawBaguette = (ctx: CanvasRenderingContext2D, x: number, y: number, angle: number) => {
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.rotate(angle);
+
+    ctx.beginPath();
+    ctx.roundRect(-20, 0, 40, 240, 20);
+    const grad = ctx.createLinearGradient(-20, 0, 20, 0);
+    grad.addColorStop(0, '#78350f');
+    grad.addColorStop(0.5, '#f59e0b');
+    grad.addColorStop(1, '#92400e');
+    ctx.fillStyle = grad;
+    ctx.fill();
+
+    ctx.strokeStyle = '#451a03';
+    ctx.lineWidth = 4;
+    for (let i = 40; i < 220; i += 50) {
+      ctx.beginPath();
+      ctx.moveTo(-12, i);
+      ctx.lineTo(12, i + 25);
+      ctx.stroke();
+    }
+    ctx.restore();
+  };
+
   const startGame = () => {
     // IMPORTANT: Set ref immediately so loop sees it
     gameStateRef.current = 'playing';
@@ -1023,6 +1281,7 @@ const NinjaGame: React.FC = () => {
 
   const startLevelTransition = async () => {
     isTransitioningRef.current = true;
+    isHandVisibleRef.current = false;
 
     // Check if new level is a region transition
     const nextLevelNum = levelRef.current + 1;
@@ -1054,7 +1313,7 @@ const NinjaGame: React.FC = () => {
         score: scoreRef.current, 
         combo: comboRef.current, 
         level: levelRef.current, 
-        state: 'level-up' 
+        state: 'level-up'
     }).then(setSenseiComment);
 
     // Increment level immediately so UI shows next level, but physics stops
@@ -1119,6 +1378,7 @@ const NinjaGame: React.FC = () => {
     await new Promise(resolve => setTimeout(resolve, 1000));
     
     setShowBombExplosion(false);
+    isHandVisibleRef.current = false;
     gameStateRef.current = 'gameover';
     setGameState('gameover');
     if (requestRef.current) cancelAnimationFrame(requestRef.current);
@@ -1131,7 +1391,7 @@ const NinjaGame: React.FC = () => {
         score: scoreRef.current, 
         combo: comboRef.current, 
         level: levelRef.current, 
-        state: 'gameover' 
+        state: 'gameover'
     }).then(setSenseiComment);
 
     // Auto submit score if logged in
@@ -1156,108 +1416,216 @@ const NinjaGame: React.FC = () => {
   }, []);
 
   const renderHome = () => (
-    <div className="absolute inset-0 z-50 flex flex-col items-center justify-center bg-slate-950 text-white p-8 overflow-y-auto">
+    <div className="absolute inset-0 z-50 flex flex-col items-center justify-center bg-[#0a0a0a] text-white p-8 overflow-y-auto overflow-x-hidden">
       
-      {/* Back to Hub Button */}
+      {/* --- DOJO ATMOSPHERE --- */}
+      
+      {/* Floor Depth */}
+      <div className="absolute bottom-0 left-0 w-full h-[40%] bg-gradient-to-t from-[#1a110d] to-transparent z-0 opacity-60" />
+      
+      {/* Structural Slats (Shoji Style) */}
+      <div className="absolute inset-0 z-0 opacity-10 flex justify-around pointer-events-none">
+        {[...Array(12)].map((_, i) => (
+          <div key={i} className="w-[1px] h-full bg-white/50 shadow-[0_0_20px_rgba(255,255,255,0.2)]" />
+        ))}
+      </div>
+
+      {/* Radiant Glowing Points */}
+      <div className="absolute top-1/4 left-1/4 w-[500px] h-[500px] bg-green-500/5 blur-[120px] rounded-full pointer-events-none animate-pulse" />
+      <div className="absolute bottom-1/4 right-1/4 w-[500px] h-[500px] bg-emerald-500/5 blur-[120px] rounded-full pointer-events-none animate-pulse" style={{ animationDelay: '2s' }} />
+
+      {/* Floating Zen Petals */}
+      <div className="absolute inset-0 z-0 pointer-events-none">
+        {[...Array(12)].map((_, i) => (
+          <motion.div
+            key={i}
+            initial={{ 
+              x: Math.random() * 100 + "%", 
+              y: -50, 
+              rotate: 0,
+              opacity: Math.random() * 0.4 + 0.1
+            }}
+            animate={{ 
+              y: "110vh", 
+              x: (Math.random() * 100 - 50) + "%",
+              rotate: 360 
+            }}
+            transition={{ 
+              duration: 15 + Math.random() * 10, 
+              repeat: Infinity, 
+              ease: "linear",
+              delay: Math.random() * 15
+            }}
+            className="absolute w-2 h-2 bg-pink-200/30 rounded-full blur-[1px]"
+          />
+        ))}
+      </div>
+
+      {/* --- DOJO CONTENT --- */}
+
       <button 
         onClick={() => navigate('/')}
-        className="absolute top-6 left-6 p-4 flex items-center justify-center gap-2 bg-slate-800/80 hover:bg-slate-700 rounded-full transition-colors font-bold text-slate-300 pointer-events-auto"
+        className="absolute top-6 left-6 p-4 flex items-center justify-center gap-2 bg-slate-900/80 hover:bg-slate-800 rounded-full transition-all hover:scale-110 font-bold text-slate-400 border border-white/5 shadow-2xl z-[60] pointer-events-auto"
       >
-         <ArrowLeft className="w-6 h-6" />
+         <ArrowLeft className="w-5 h-5" />
       </button>
 
-      <h1 className="text-6xl font-bold mb-8 text-green-400 drop-shadow-[0_0_10px_rgba(74,222,128,0.8)] animate-pulse mt-8">NINJA HANDS</h1>
-      
-      {/* Avatar Selection */}
-      <div className="w-full max-w-lg mb-8">
-        <h3 className="text-center text-slate-400 font-black uppercase tracking-[0.3em] text-xs mb-4">Choose Your Sensei</h3>
-        <div className="grid grid-cols-4 gap-4">
-          {AVATARS.map((avatar) => (
-            <button
-              key={avatar.id}
-              onClick={() => setSelectedAvatar(avatar)}
-              className={`
-                flex flex-col items-center gap-2 p-4 rounded-2xl border-2 transition-all group
-                ${selectedAvatar.id === avatar.id 
-                  ? `${avatar.color} border-current scale-105 shadow-lg` 
-                  : 'bg-slate-900 border-transparent hover:bg-slate-800'}
-              `}
-            >
-              <span className="text-4xl group-hover:scale-110 transition-transform">{avatar.emoji}</span>
-              <span className={`text-[10px] font-black uppercase tracking-tighter ${selectedAvatar.id === avatar.id ? 'text-white' : 'text-slate-500'}`}>
-                {avatar.name}
-              </span>
-            </button>
-          ))}
-        </div>
-        <p className="text-center text-[10px] text-slate-600 mt-4 italic">
-          {selectedAvatar.personality === 'mean' && "Shadow will not be impressed easily."}
-          {selectedAvatar.personality === 'heroic' && "Spark will cheer you to greatness!"}
-          {selectedAvatar.personality === 'calm' && "Zen brings focus to the chaos."}
-          {selectedAvatar.personality === 'sarcastic' && "Rogue has seen better ninjas."}
-        </p>
-      </div>
-
-      <div className="bg-slate-900 border border-green-500/50 p-6 rounded-2xl mb-8 w-full max-w-sm drop-shadow-[0_0_5px_rgba(74,222,128,0.5)]">
-        <h3 className="text-xl font-black mb-4 text-center uppercase tracking-widest text-green-500">Leaderboard</h3>
-        <div className="space-y-2 text-sm">
-          {leaderboard.length > 0 ? (
-            leaderboard.map((entry, idx) => (
-              <div key={idx} className="flex justify-between border-b border-green-500/20 pb-1">
-                <span>{entry.displayName}</span>
-                <span className="font-mono text-green-400">{entry.score}</span>
+      <div className="relative z-10 w-full max-w-4xl flex flex-col items-center pt-8 pb-12">
+        <motion.h1 
+          initial={{ opacity: 0, y: -20 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="text-7xl font-black mb-12 text-green-400 drop-shadow-[0_0_15px_rgba(74,222,128,0.4)] tracking-tighter text-center"
+        >
+          NINJA HANDS
+        </motion.h1>
+        
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 w-full">
+          {/* Left Column: Selection */}
+          <div className="space-y-6">
+            {/* Avatar Selection */}
+            <section className="bg-white/[0.03] backdrop-blur-xl p-6 rounded-[2rem] border border-white/5 shadow-2xl">
+              <h3 className="text-center text-slate-500 font-black uppercase tracking-[0.4em] text-[10px] mb-6">Choose Your Sensei</h3>
+              <div className="grid grid-cols-4 gap-3">
+                {AVATARS.map((avatar) => (
+                  <button
+                    key={avatar.id}
+                    onClick={() => setSelectedAvatar(avatar)}
+                    className={`
+                      flex flex-col items-center gap-2 p-3 rounded-2xl border-2 transition-all hover:scale-105
+                      ${selectedAvatar.id === avatar.id 
+                        ? `${avatar.color} border-current shadow-[0_0_20px_rgba(255,255,255,0.05)]` 
+                        : 'bg-black/40 border-transparent text-slate-500'}
+                    `}
+                  >
+                    <span className="text-3xl drop-shadow-xl">{avatar.emoji}</span>
+                    <span className="text-[9px] font-black uppercase tracking-tighter">{avatar.name}</span>
+                  </button>
+                ))}
               </div>
-            ))
-          ) : (
-            <div className="text-center text-slate-500 italic">No scores yet...</div>
-          )}
-        </div>
-      </div>
+              <p className="text-center text-[11px] text-slate-400 mt-5 italic font-medium opacity-80">
+                &ldquo;{selectedAvatar.personality === 'mean' && "Shadow will not be impressed easily."}
+                {selectedAvatar.personality === 'heroic' && "Spark will cheer you to greatness!"}
+                {selectedAvatar.personality === 'calm' && "Zen brings focus to the chaos."}
+                {selectedAvatar.personality === 'sarcastic' && "Rogue has seen better ninjas."}&rdquo;
+              </p>
+            </section>
 
-      {!user ? (
-        <div className="flex flex-col items-center gap-4 mb-8">
-          <input 
-            type="text" 
-            placeholder="Enter guest name" 
-            className="bg-slate-900 border border-green-500/50 p-3 rounded text-center outline-none focus:border-green-400 w-full max-w-xs" 
-            value={guestName}
-            onChange={(e) => setGuestName(e.target.value)}
-          />
-          <button 
-            onClick={handleSignIn} 
-            className="flex items-center gap-2 bg-white text-black px-6 py-2 rounded font-bold hover:bg-slate-200 transition-colors"
-          >
-            <LogIn className="w-5 h-5" />
-            Sign in with Google
-          </button>
-        </div>
-      ) : (
-        <div className="flex items-center gap-4 bg-slate-900/80 p-4 rounded-xl border border-green-500/30 mb-8 max-w-xs w-full">
-          <img 
-            src={user.photoURL || `https://ui-avatars.com/api/?name=${user.displayName}`} 
-            alt="User" 
-            className="w-12 h-12 rounded-full border-2 border-green-500"
-            referrerPolicy="no-referrer"
-          />
-          <div className="flex flex-col flex-1 overflow-hidden">
-            <span className="font-bold text-green-400 truncate">{user.displayName}</span>
-            <button 
-              onClick={handleSignOut}
-              className="text-slate-500 text-xs text-left hover:text-red-400 font-bold uppercase tracking-widest flex items-center gap-1"
-            >
-              <LogOut className="w-3 h-3" />
-              Sign Out
-            </button>
+            {/* Blade Selection */}
+            <section className="bg-white/[0.03] backdrop-blur-xl p-6 rounded-[2rem] border border-white/5 shadow-2xl">
+              <h3 className="text-center text-slate-500 font-black uppercase tracking-[0.4em] text-[10px] mb-6">Steel Your Blade</h3>
+              <div className="grid grid-cols-4 gap-3">
+                {BLADES.map((blade) => (
+                  <button
+                    key={blade.id}
+                    onClick={() => setSelectedBlade(blade)}
+                    className={`
+                      flex flex-col items-center gap-2 p-3 rounded-2xl border-2 transition-all hover:scale-105
+                      ${selectedBlade.id === blade.id 
+                        ? `${blade.color} border-current shadow-[0_0_20px_rgba(255,255,255,0.05)]` 
+                        : 'bg-black/40 border-transparent text-slate-500'}
+                    `}
+                  >
+                    <span className="text-3xl drop-shadow-xl group-hover:rotate-12 transition-transform">{blade.emoji}</span>
+                    <span className="text-[9px] font-black uppercase tracking-tighter">{blade.name}</span>
+                  </button>
+                ))}
+              </div>
+            </section>
+          </div>
+
+          {/* Right Column: Community & Auth */}
+          <div className="space-y-6">
+            {/* Leaderboard */}
+            <section className="bg-white/[0.03] backdrop-blur-xl p-6 rounded-[2rem] border border-white/5 shadow-2xl min-h-[200px]">
+              <h3 className="text-center text-green-500/80 font-black uppercase tracking-[0.4em] text-[10px] mb-6 flex items-center justify-center gap-2">
+                <Trophy className="w-3 h-3" /> Hall of Fame
+              </h3>
+              <div className="space-y-3">
+                {leaderboard.length > 0 ? (
+                  leaderboard.map((entry, idx) => (
+                    <div key={idx} className="flex justify-between items-center group">
+                      <div className="flex items-center gap-3">
+                        <span className="text-[10px] font-black text-slate-600">0{idx + 1}</span>
+                        <span className="font-bold text-sm text-slate-200 group-hover:text-white transition-colors">{entry.displayName}</span>
+                      </div>
+                      <span className="font-mono text-xs text-green-400/80 tabular-nums">{entry.score.toLocaleString()}</span>
+                    </div>
+                  ))
+                ) : (
+                  <div className="flex flex-col items-center justify-center py-8 opacity-20">
+                    <Trophy className="w-8 h-8 mb-2" />
+                    <span className="text-[10px] font-bold uppercase tracking-widest">Awaiting legends...</span>
+                  </div>
+                )}
+              </div>
+            </section>
+
+            {/* Auth Panel */}
+            <section className="bg-white/[0.03] backdrop-blur-xl p-6 rounded-[2rem] border border-white/5 shadow-2xl">
+              {!user ? (
+                <div className="space-y-4">
+                  <div className="relative">
+                    <input 
+                      type="text" 
+                      placeholder="GUEST NAME" 
+                      className="w-full bg-black/40 border border-white/5 p-4 rounded-xl text-center text-sm font-bold uppercase tracking-widest outline-none focus:border-green-500/30 focus:bg-black/60 transition-all" 
+                      value={guestName}
+                      onChange={(e) => setGuestName(e.target.value)}
+                    />
+                  </div>
+                  <button 
+                    onClick={handleSignIn} 
+                    className="w-full h-14 bg-white text-black rounded-xl font-black uppercase tracking-widest text-xs flex items-center justify-center gap-3 hover:bg-slate-200 transition-all hover:scale-[1.02] shadow-xl"
+                  >
+                    <img src="https://www.google.com/favicon.ico" className="w-4 h-4" alt="G" />
+                    Sign in for leaderboard
+                  </button>
+                </div>
+              ) : (
+                <div className="flex items-center gap-4 bg-black/40 p-4 rounded-2xl border border-white/5">
+                  <div className="relative">
+                    <img 
+                      src={user.photoURL || `https://ui-avatars.com/api/?name=${user.displayName}`} 
+                      alt="User" 
+                      className="w-12 h-12 rounded-full border-2 border-green-500/50 shadow-lg"
+                      referrerPolicy="no-referrer"
+                    />
+                    <div className="absolute -bottom-1 -right-1 w-4 h-4 bg-green-500 rounded-full border-2 border-[#0a0a0a]" />
+                  </div>
+                  <div className="flex flex-col flex-1 overflow-hidden">
+                    <span className="font-black text-green-400 text-sm truncate uppercase tracking-tight">{user.displayName}</span>
+                    <button 
+                      onClick={handleSignOut}
+                      className="text-slate-500 text-[10px] text-left hover:text-red-400 font-bold uppercase tracking-[0.2em] flex items-center gap-1 transition-colors mt-1"
+                    >
+                      <LogOut className="w-3 h-3" />
+                      Leave Dojo
+                    </button>
+                  </div>
+                </div>
+              )}
+            </section>
           </div>
         </div>
-      )}
 
-      <button 
-        onClick={() => handleEnableCamera()} 
-        className="text-3xl font-black bg-green-500 text-black px-12 py-4 rounded-full hover:bg-green-400 hover:scale-110 transition-all shadow-[0_0_20px_rgba(34,197,94,0.6)]"
-      >
-        PLAY NOW
-      </button>
+        {/* Start Button */}
+        <div className="mt-12 group">
+          <button
+            onClick={() => handleEnableCamera()}
+            className="relative px-20 py-6 bg-green-500 rounded-full overflow-hidden transition-all duration-300 hover:scale-105 active:scale-95 shadow-[0_0_40px_rgba(34,197,94,0.3)] hover:shadow-[0_0_60px_rgba(34,197,94,0.5)]"
+          >
+            <div className="absolute inset-0 bg-white/20 translate-y-full group-hover:translate-y-0 transition-transform duration-300" />
+            <span className="relative z-10 text-black font-black text-3xl tracking-tighter uppercase italic">
+              Enter Dojo
+            </span>
+          </button>
+          <div className="mt-4 text-center">
+            <span className="text-slate-600 text-[10px] font-black uppercase tracking-[0.4em] animate-pulse">
+              Ready your hands...
+            </span>
+          </div>
+        </div>
+      </div>
     </div>
   );
 
