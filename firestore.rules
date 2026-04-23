@@ -41,8 +41,8 @@ service cloud.firestore {
 
     // Collections
     match /leaderboard/{scoreId} {
-      allow list: if isSignedIn(); 
-      allow get: if isSignedIn();
+      allow list: if true; 
+      allow get: if true;
       
       allow create: if isSignedIn() 
         && isValidId(scoreId) 

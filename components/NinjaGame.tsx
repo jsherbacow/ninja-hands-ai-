@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { HandLandmarker } from '@mediapipe/tasks-vision';
 import { createHandLandmarker } from '../utils/handDetection';
-import { Loader2, Camera, Play, RotateCcw, AlertCircle, Trophy, User, LogIn, ArrowLeft } from 'lucide-react';
+import { Loader2, Camera, Play, RotateCcw, AlertCircle, Trophy, User, LogIn, ArrowLeft, Palmtree, Mountain, Trees, Wind, Sun, Compass } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { auth, signInWithGoogle, submitScore, getTopScores, LeaderboardEntry } from '../lib/firebase';
 import { getSenseiCommentary } from '../lib/gemini';
@@ -27,6 +27,7 @@ interface Fruit {
   radius: number;
   sliced: boolean;
   type: 'fruit' | 'bomb' | 'slowmo' | 'frenzy' | 'shield';
+  life: number;
 }
 
 interface Notification {
@@ -47,6 +48,8 @@ interface Particle {
   life: number; // 0 to 1
   color: string;
   size: number;
+  angle: number;
+  rotationSpeed: number;
 }
 
 interface Splat {
@@ -107,9 +110,16 @@ const AVATARS: Avatar[] = [
   { id: 'rogue', name: 'Rogue', emoji: '😼', color: 'border-purple-500 bg-purple-900/20', personality: 'sarcastic' }
 ];
 
+const FRUIT_COLORS: Record<string, string> = {
+  '🍎': '#ff4444', '🍏': '#a3e635', '🍌': '#facc15', '🍐': '#bef264', '🍊': '#fb923c', '🍓': '#f43f5e',
+  '🍍': '#fef08a', '🥥': '#f8fafc', '🥭': '#fbbf24', '🥝': '#84cc16', '🍉': '#ef4444', '🍋': '#fde047',
+  '🍇': '#a855f7', '🫐': '#3b82f6', '🍑': '#fca5a5', '🍒': '#dc2626', '🍅': '#ef4444', '🫒': '#65a30d',
+  '🌽': '#eab308', '🥕': '#f97316', '🍆': '#8b5cf6', '🫑': '#22c55e', '🥦': '#16a34a', '🧅': '#f1f5f9'
+};
+
 const GRAVITY = 0.25;
 const FRUIT_SPAWN_RATE = 60; // Frames between spawns
-const BLADE_LENGTH = 10; // Number of points in the trail
+const BLADE_LENGTH = 7; // Shorter trail for performance
 const BOMB = '💣';
 const SPECIAL_FRUITS = {
   slowmo: '❄️',
@@ -129,7 +139,6 @@ const NinjaGame: React.FC = () => {
   const [showLevelUp, setShowLevelUp] = useState(false);
   const [countdown, setCountdown] = useState(3);
   const [isPaused, setIsPaused] = useState(false);
-  const [notifications, setNotifications] = useState<Notification[]>([]);
   const [user, setUser] = useState<FirebaseUser | null>(null);
   const [leaderboard, setLeaderboard] = useState<LeaderboardEntry[]>([]);
   const [senseiComment, setSenseiComment] = useState<string>("");
@@ -138,6 +147,9 @@ const NinjaGame: React.FC = () => {
   const [isInitializing, setIsInitializing] = useState(false);
   const [selectedAvatar, setSelectedAvatar] = useState<Avatar>(AVATARS[0]);
   const [avatarComment, setAvatarComment] = useState<string>("Ready, Ninja?");
+  const [showRegionCutscene, setShowRegionCutscene] = useState(false);
+  const [showBombExplosion, setShowBombExplosion] = useState(false);
+  const [transitionRegion, setTransitionRegion] = useState<Region>(REGIONS[0]);
   const commentTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const consecutiveSlicesRef = useRef(0);
 
@@ -166,7 +178,10 @@ const NinjaGame: React.FC = () => {
   const hasShieldRef = useRef(false);
   const notificationsRef = useRef<Notification[]>([]);
   const splatsRef = useRef<Splat[]>([]);
+  const cachedGradientRef = useRef<CanvasGradient | null>(null);
   const lastVideoTimeRef = useRef(-1);
+  const shakeRef = useRef(0);
+  const hitstopFramesRef = useRef(0);
   
   // Sync gameState state with ref
   useEffect(() => {
@@ -249,8 +264,8 @@ const NinjaGame: React.FC = () => {
     const regionIdx = Math.min(Math.floor((levelRef.current - 1) / 2), REGIONS.length - 1);
     const region = REGIONS[regionIdx];
 
-    // Increase bomb chance with level
-    const currentBombChance = Math.min(0.15 + (levelRef.current - 1) * 0.05, 0.4);
+    // Increase bomb chance with level - starting at 18% for level 1
+    const currentBombChance = Math.min(0.18 + (levelRef.current - 1) * 0.05, 0.45);
     const rng = Math.random();
     
     let type: Fruit['type'] = 'fruit';
@@ -290,32 +305,106 @@ const NinjaGame: React.FC = () => {
       emoji,
       radius,
       sliced: false,
-      type
+      type,
+      life: 1.0
     });
   };
 
-  const createExplosion = (x: number, y: number, color: string) => {
-    for (let i = 0; i < 15; i++) {
+  const createExplosion = (x: number, y: number, color: string, count: number = 10, ignoreLimit: boolean = false) => {
+    // Optimization: limit total active particles
+    if (!ignoreLimit && particlesRef.current.length > 80) return;
+
+    for (let i = 0; i < count; i++) {
+        const speed = Math.random() * 8 + 4;
+        const angle = Math.random() * Math.PI * 2;
       particlesRef.current.push({
         id: Math.random(),
         x, y,
-        vx: (Math.random() - 0.5) * 15,
-        vy: (Math.random() - 0.5) * 15,
+        vx: Math.cos(angle) * speed,
+        vy: Math.sin(angle) * speed,
         life: 1.0,
         color,
-        size: Math.random() * 5 + 2
+        size: Math.random() * 6 + 2,
+        angle: Math.random() * Math.PI * 2,
+        rotationSpeed: (Math.random() - 0.5) * 0.2
       });
     }
+    shakeRef.current = 15;
+  };
+
+  const createEnvironmentalParticles = () => {
+    // Optimization: limit total active particles
+    if (particlesRef.current.length > 100 || Math.random() > 0.3) return; 
+
+    const regionIdx = Math.min(Math.floor((levelRef.current - 1) / 2), REGIONS.length - 1);
+    const region = REGIONS[regionIdx];
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+
+    let color = '#fff';
+    if (region.name === "Zen Orchard") color = '#fecdd3'; // Pink blossoms
+    if (region.name === "Tropical Bay") color = '#7dd3fc'; // Blue sparkles
+    if (region.name === "Shadow Peaks") color = '#d8b4fe'; // Purple mist
+    if (region.name === "Imperial Harvest") color = '#fbbf24'; // Golden leaves
+
+    particlesRef.current.push({
+        id: Math.random(),
+        x: Math.random() * canvas.width,
+        y: -20,
+        vx: (Math.random() - 0.5) * 2,
+        vy: Math.random() * 2 + 1,
+        life: 1.0,
+        color,
+        size: Math.random() * 4 + 2,
+        angle: Math.random() * Math.PI * 2,
+        rotationSpeed: (Math.random() - 0.5) * 0.05
+    });
+  };
+
+  const createJuice = (x: number, y: number, color: string) => {
+    // Optimization: limit juice if too many particles
+    if (particlesRef.current.length > 100) return;
+    
+    for (let i = 0; i < 8; i++) {
+        const speed = Math.random() * 6 + 2;
+        const angle = Math.random() * Math.PI * 2;
+        particlesRef.current.push({
+            id: Math.random(),
+            x, y,
+            vx: Math.cos(angle) * speed,
+            vy: (Math.random() - 0.7) * 10, // upward spray
+            life: 0.8 + Math.random() * 0.4,
+            color,
+            size: Math.random() * 5 + 1,
+            angle: Math.random() * Math.PI * 2,
+            rotationSpeed: (Math.random() - 0.5) * 0.3
+        });
+    }
+    // Small flash at slice location
+    particlesRef.current.push({
+        id: Math.random(),
+        x, y,
+        vx: 0, vy: 0,
+        life: 0.2,
+        color: '#ffffff',
+        size: 40,
+        angle: 0,
+        rotationSpeed: 0
+    });
+    shakeRef.current = Math.max(shakeRef.current, 8);
   };
 
   const addNotification = (x: number, y: number, text: string, color: string = '#fff') => {
+    // Limit total notifications to prevent memory issues
+    if (notificationsRef.current.length > 10) {
+      notificationsRef.current.shift();
+    }
     const newNotif = {
       id: Math.random(),
       x, y, text, color,
       life: 1.0
     };
     notificationsRef.current.push(newNotif);
-    setNotifications([...notificationsRef.current]);
 
     // Avatar Commentary Logic
     triggerAvatarComment('success', text);
@@ -427,6 +516,12 @@ const NinjaGame: React.FC = () => {
       drawY = (canvas.height - drawH) / 2;
     }
 
+    // Check for hitstop
+    if (hitstopFramesRef.current > 0) {
+        hitstopFramesRef.current--;
+        return;
+    }
+
     // A. Detect Hands (Only if not paused and playing)
     let handX = -1;
     let handY = -1;
@@ -472,21 +567,34 @@ const NinjaGame: React.FC = () => {
     // B. Clear & Update Canvas
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
+    // Apply Screen Shake
+    if (shakeRef.current > 0) {
+        ctx.save();
+        const sx = (Math.random() - 0.5) * shakeRef.current;
+        const sy = (Math.random() - 0.5) * shakeRef.current;
+        ctx.translate(sx, sy);
+        shakeRef.current *= 0.9;
+        if (shakeRef.current < 0.1) shakeRef.current = 0;
+    }
+
     // Dynamic Background Gradient (shifts with region)
     const regionIdx = Math.min(Math.floor((levelRef.current - 1) / 2), REGIONS.length - 1);
     const region = REGIONS[regionIdx];
     
-    const grad = ctx.createRadialGradient(
-      canvas.width / 2, 
-      canvas.height / 2, 
-      0, 
-      canvas.width / 2, 
-      canvas.height / 2, 
-      canvas.width
-    );
-    grad.addColorStop(0, region.colors[0]);
-    grad.addColorStop(1, region.colors[1]);
-    ctx.fillStyle = grad;
+    if (!cachedGradientRef.current) {
+        const grad = ctx.createRadialGradient(
+          canvas.width / 2, 
+          canvas.height / 2, 
+          0, 
+          canvas.width / 2, 
+          canvas.height / 2, 
+          canvas.width
+        );
+        grad.addColorStop(0, region.colors[0]);
+        grad.addColorStop(1, region.colors[1]);
+        cachedGradientRef.current = grad;
+    }
+    ctx.fillStyle = cachedGradientRef.current;
     ctx.fillRect(0, 0, canvas.width, canvas.height);
 
     // C. Draw Video Feed (Optional: Semi-transparent background)
@@ -500,8 +608,6 @@ const NinjaGame: React.FC = () => {
     if (handX !== -1 && handY !== -1) {
       ctx.save();
       ctx.fillStyle = 'rgba(34, 211, 238, 0.6)';
-      ctx.shadowBlur = 20;
-      ctx.shadowColor = '#22d3ee';
       ctx.beginPath();
       ctx.arc(handX, handY, 15, 0, Math.PI * 2);
       ctx.fill();
@@ -556,15 +662,47 @@ const NinjaGame: React.FC = () => {
         fruit.vy += GRAVITY * timeScaleRef.current;
         fruit.x += fruit.vx * timeScaleRef.current;
         fruit.y += fruit.vy * timeScaleRef.current;
+        if (fruit.sliced) fruit.life -= 0.05 * timeScaleRef.current;
 
         // Draw Fruit
+        ctx.save();
+        ctx.translate(fruit.x, fruit.y);
         ctx.font = `${fruit.radius * 2}px Arial`;
         ctx.textAlign = "center";
         ctx.textBaseline = "middle";
-        ctx.fillText(fruit.emoji, fruit.x, fruit.y);
 
-        // Remove if off screen
-        if (fruit.y > canvas.height + 100) {
+        if (fruit.sliced) {
+            // Draw two halves
+            const sliceOffset = (1.0 - fruit.life) * 50; // Use a life property or frame count?
+            // Fruit doesn't have life, I'll use a simple timer or just velocity
+            // Let's use a simple horizontal separation
+            
+            // Left half
+            ctx.save();
+            ctx.translate(-sliceOffset, 0);
+            ctx.rotate(-sliceOffset * 0.1);
+            ctx.beginPath();
+            ctx.rect(-fruit.radius * 2, -fruit.radius * 2, fruit.radius * 2, fruit.radius * 4);
+            ctx.clip();
+            ctx.fillText(fruit.emoji, 0, 0);
+            ctx.restore();
+
+            // Right half
+            ctx.save();
+            ctx.translate(sliceOffset, 0);
+            ctx.rotate(sliceOffset * 0.1);
+            ctx.beginPath();
+            ctx.rect(0, -fruit.radius * 2, fruit.radius * 2, fruit.radius * 4);
+            ctx.clip();
+            ctx.fillText(fruit.emoji, 0, 0);
+            ctx.restore();
+        } else {
+            ctx.fillText(fruit.emoji, 0, 0);
+        }
+        ctx.restore();
+
+        // Remove if off screen or decayed
+        if (fruit.y > canvas.height + 100 || (fruit.sliced && fruit.life <= 0)) {
           if (fruit.type === 'fruit' && !fruit.sliced) {
             handleMiss();
           }
@@ -600,6 +738,27 @@ const NinjaGame: React.FC = () => {
               scoreRef.current += 10;
               setScore(scoreRef.current);
               
+              const fruitColor = FRUIT_COLORS[fruit.emoji] || '#ffffff';
+              createJuice(fruit.x, fruit.y, fruitColor);
+              addNotification(fruit.x, fruit.y, '+10', fruitColor);
+
+              // Splat on background (Limit total splats)
+              if (splatsRef.current.length > 15) {
+                  splatsRef.current.shift();
+              }
+              splatsRef.current.push({
+                  id: Math.random(),
+                  x: fruit.x,
+                  y: fruit.y,
+                  color: fruitColor,
+                  life: 1.0
+              });
+
+              fruit.sliced = true;
+              fruit.vx *= 0.5;
+              fruit.vy = -2;
+              hitstopFramesRef.current = 3; // 3 frames of pause for impact
+
               consecutiveSlicesRef.current++;
               if (consecutiveSlicesRef.current % 5 === 0) {
                 triggerAvatarComment('success', 'SLICE');
@@ -610,15 +769,22 @@ const NinjaGame: React.FC = () => {
               if (comboResetTimerRef.current) clearTimeout(comboResetTimerRef.current);
               comboResetTimerRef.current = window.setTimeout(() => {
                 if (comboRef.current > 1) {
-                  const bonus = comboRef.current * 5;
+                  const bonus = comboRef.current * 10;
                   scoreRef.current += bonus;
                   setScore(scoreRef.current);
+                  addNotification(canvas.width / 2, canvas.height / 2, `COMBO BONUS +${bonus}`, '#ffff00');
                 }
                 comboRef.current = 0;
-              }, 300); // 300ms window for combo
+              }, 400); // 400ms window for combo
 
               if (comboRef.current >= 3) {
                 addNotification(fruit.x, fruit.y - 40, `COMBO x${comboRef.current}!`, '#ffff00');
+                // Combo Flash
+                ctx.save();
+                ctx.globalAlpha = 0.1;
+                ctx.fillStyle = '#fff';
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
+                ctx.restore();
               }
 
               // Special Effects
@@ -657,9 +823,10 @@ const NinjaGame: React.FC = () => {
       }
 
       // E. Spawn New Fruits
+      createEnvironmentalParticles();
       frameCountRef.current++;
       // Decrease spawn interval as level increases
-      const spawnRate = Math.max(60 - (levelRef.current - 1) * 5, 20);
+      const spawnRate = Math.max(65 - (levelRef.current - 1) * 3, 25);
       if (frameCountRef.current % (Math.floor(spawnRate / timeScaleRef.current)) === 0) {
         spawnFruit(canvas.width, canvas.height);
       }
@@ -677,11 +844,21 @@ const NinjaGame: React.FC = () => {
         if (p.life <= 0) {
           particlesRef.current.splice(i, 1);
         } else {
+          p.angle += p.rotationSpeed * timeScaleRef.current;
+          ctx.save();
+          ctx.translate(p.x, p.y);
+          ctx.rotate(p.angle);
           ctx.fillStyle = p.color;
           ctx.globalAlpha = p.life;
           ctx.beginPath();
-          ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
+          // Draw a small square for bits, circle for juice
+          if (p.size > 2) {
+            ctx.rect(-p.size/2, -p.size/2, p.size, p.size);
+          } else {
+            ctx.arc(0, 0, p.size, 0, Math.PI * 2);
+          }
           ctx.fill();
+          ctx.restore();
         }
       }
 
@@ -694,17 +871,14 @@ const NinjaGame: React.FC = () => {
           notificationsRef.current.splice(i, 1);
         } else {
           ctx.save();
-          ctx.font = `bold ${24 + n.life * 10}px Inter`;
+          ctx.font = `bold ${20 + n.life * 8}px Inter`;
           ctx.fillStyle = n.color;
           ctx.globalAlpha = n.life;
           ctx.textAlign = 'center';
-          ctx.shadowBlur = 10;
-          ctx.shadowColor = 'rgba(0,0,0,0.5)';
           ctx.fillText(n.text, n.x, n.y);
           ctx.restore();
         }
       }
-      setNotifications([...notificationsRef.current]);
 
       ctx.globalAlpha = 1.0;
     } else if (currentState === 'playing' && isPausedRef.current) {
@@ -725,23 +899,39 @@ const NinjaGame: React.FC = () => {
        ctx.globalAlpha = 1.0;
     }
 
-    // G. Draw Blade Trail
+    // G. Draw Blade Trail (Optimized)
     const path = bladePathRef.current;
-    if (path.length > 1) {
+    if (path.length > 2) {
+      ctx.save();
+      // Glow Sub-layer (Single pass)
       ctx.beginPath();
       ctx.strokeStyle = 'cyan';
-      ctx.lineWidth = 10;
+      ctx.lineWidth = 12;
       ctx.lineCap = 'round';
       ctx.lineJoin = 'round';
-      ctx.shadowBlur = 15;
-      ctx.shadowColor = 'cyan';
-      
+      ctx.globalAlpha = 0.3; // Lighter alpha is cheaper than heavy shadow
       ctx.moveTo(path[0].x, path[0].y);
       for (let i = 1; i < path.length; i++) {
         ctx.lineTo(path[i].x, path[i].y);
       }
       ctx.stroke();
+
+      // Sharp Core (Tapered but simpler)
+      ctx.globalAlpha = 1.0;
       ctx.shadowBlur = 0;
+      ctx.strokeStyle = '#fff';
+      for (let i = 1; i < path.length; i++) {
+        ctx.lineWidth = 6 * (i / path.length);
+        ctx.beginPath();
+        ctx.moveTo(path[i-1].x, path[i-1].y);
+        ctx.lineTo(path[i].x, path[i].y);
+        ctx.stroke();
+      }
+      ctx.restore();
+    }
+
+    if (shakeRef.current > 0) {
+        ctx.restore();
     }
   };
 
@@ -768,6 +958,7 @@ const NinjaGame: React.FC = () => {
     timeScaleRef.current = 1.0;
     hasShieldRef.current = false;
     consecutiveSlicesRef.current = 0;
+    cachedGradientRef.current = null;
     
     // Resize Canvas to Match Window
     if (canvasRef.current) {
@@ -806,6 +997,26 @@ const NinjaGame: React.FC = () => {
 
   const startLevelTransition = async () => {
     isTransitioningRef.current = true;
+
+    // Check if new level is a region transition
+    const nextLevelNum = levelRef.current + 1;
+    const isNewRegion = nextLevelNum === 3 || nextLevelNum === 5 || nextLevelNum === 7;
+    
+    if (isNewRegion) {
+        // Clear objects immediately so they don't show behind cutscene
+        fruitsRef.current = [];
+        particlesRef.current = [];
+        bladePathRef.current = [];
+        cachedGradientRef.current = null;
+        
+        const nextRegion = REGIONS[Math.floor((nextLevelNum - 1) / 2)];
+        setTransitionRegion(nextRegion);
+        setShowRegionCutscene(true);
+        // Wait 2 seconds for cutscene
+        await new Promise(resolve => setTimeout(resolve, 2000));
+        setShowRegionCutscene(false);
+    }
+
     setShowLevelUp(true);
     setCountdown(3);
     
@@ -861,11 +1072,30 @@ const NinjaGame: React.FC = () => {
     requestRef.current = requestAnimationFrame(loop);
   };
 
-  const handleGameOver = () => {
+  const handleGameOver = async () => {
+    // Immediate physics stop but keep drawing the explosion
+    if (timerRef.current) clearInterval(timerRef.current);
+    isTransitioningRef.current = true;
+    
+    // Trigger Full Screen Explosion Animation
+    setShowBombExplosion(true);
+    shakeRef.current = 50; // Mega shake
+    
+    // Physical Explosion on Canvas too
+    const canvas = canvasRef.current;
+    if (canvas) {
+        createExplosion(canvas.width / 2, canvas.height / 2, '#ff0000', 50, true);
+        createExplosion(canvas.width / 3, canvas.height / 3, '#ffaa00', 30, true);
+        createExplosion(canvas.width * 0.7, canvas.height * 0.7, '#ffaa00', 30, true);
+    }
+    
+    // Wait for the boom effect
+    await new Promise(resolve => setTimeout(resolve, 1000));
+    
+    setShowBombExplosion(false);
     gameStateRef.current = 'gameover';
     setGameState('gameover');
     if (requestRef.current) cancelAnimationFrame(requestRef.current);
-    if (timerRef.current) clearInterval(timerRef.current);
 
     // Avatar Final Commentary
     triggerAvatarComment('failure', 'BOMB');
@@ -1127,6 +1357,233 @@ const NinjaGame: React.FC = () => {
       )}
 
       {/* Transition Overlay (Level Up) */}
+      {/* Region Cutscene Overlay */}
+      <AnimatePresence>
+        {showBombExplosion && (
+          <motion.div 
+            initial={{ opacity: 0 }}
+            animate={{ 
+              opacity: 1,
+              x: [0, -10, 10, -10, 10, 0], // UI Rumble
+              y: [0, 5, -5, 5, -5, 0]
+            }}
+            transition={{ duration: 0.2, repeat: 10 }}
+            exit={{ opacity: 0 }}
+            className="absolute inset-0 z-[200] pointer-events-none flex flex-col items-center justify-end overflow-hidden"
+          >
+            {/* 1. Initial Blinding Plasma Flash */}
+            <motion.div 
+              initial={{ opacity: 0 }}
+              animate={{ opacity: [0, 1, 0] }}
+              transition={{ duration: 0.5, times: [0, 0.2, 1] }}
+              className="absolute inset-0 bg-white"
+            />
+
+            {/* 2. Intense Heat distortion / Red Vignette */}
+            <motion.div 
+              animate={{ 
+                opacity: [0, 0.8, 0],
+                backgroundColor: ['rgba(127,29,29,0)', 'rgba(127,29,29,0.5)', 'rgba(127,29,29,0)']
+              }}
+              transition={{ duration: 0.2, repeat: 4 }}
+              className="absolute inset-0 shadow-[inset_0_0_300px_rgba(220,38,38,1)]"
+            />
+
+            {/* 3. Plasma Expansion Ring */}
+            <motion.div 
+               initial={{ scale: 0, opacity: 1, borderWidth: 100 }}
+               animate={{ scale: 5, opacity: 0, borderWidth: 0 }}
+               transition={{ duration: 0.8, ease: "easeOut" }}
+               className="absolute w-64 h-64 border-white border-solid rounded-full z-[210] blur-sm"
+            />
+
+            {/* 4. Rising Embers (UI Particles) */}
+            <div className="absolute inset-x-0 bottom-0 top-0 overflow-hidden">
+               {[...Array(20)].map((_, i) => (
+                 <motion.div
+                   key={i}
+                   initial={{ 
+                     x: `${Math.random() * 100}%`, 
+                     y: "110%", 
+                     scale: Math.random() * 2 + 1,
+                     opacity: 0 
+                   }}
+                   animate={{ 
+                     y: "-10%", 
+                     x: `${(Math.random() * 100) + (Math.random() - 0.5) * 20}%`,
+                     opacity: [0, 1, 0] 
+                   }}
+                   transition={{ 
+                     duration: 1.5 + Math.random(), 
+                     delay: Math.random() * 1,
+                     repeat: Infinity
+                   }}
+                   className="absolute w-2 h-2 bg-yellow-500 rounded-full blur-[1px]"
+                 />
+               ))}
+            </div>
+
+            {/* THE VOLUMETRIC MUSHROOM CLOUD */}
+            <div className="relative bottom-0 flex flex-col items-center w-full">
+              
+              {/* Stem (Central Column) */}
+              <motion.div 
+                initial={{ height: 0, opacity: 0 }}
+                animate={{ height: "65vh", opacity: 1 }}
+                transition={{ duration: 0.3, ease: "easeOut" }}
+                className="w-32 bg-gradient-to-t from-red-900 via-orange-500 to-yellow-200 blur-md rounded-full relative z-10"
+              >
+                {/* Plasma core in stem */}
+                <motion.div 
+                   animate={{ opacity: [0.3, 0.8, 0.3], scaleX: [0.8, 1, 0.8] }}
+                   transition={{ duration: 0.15, repeat: Infinity }}
+                   className="absolute inset-0 bg-white/40 blur-lg" 
+                />
+              </motion.div>
+
+              {/* Billowing Cap Structure */}
+              <div className="absolute top-0 -translate-y-1/2 flex items-center justify-center">
+                 
+                 {/* Core fireball */}
+                 <motion.div 
+                    initial={{ scale: 0.2, opacity: 0, y: 150 }}
+                    animate={{ scale: [0.2, 4], opacity: [0, 1, 0.9], y: 0 }}
+                    transition={{ duration: 0.5, ease: "circOut" }}
+                    className="w-72 h-56 bg-gradient-to-b from-yellow-200 via-orange-500 to-red-950 rounded-[50%] blur-2xl relative z-20"
+                 />
+
+                 {/* Smoke Layers (Outer) */}
+                 {[0, 60, 120, 180, 240, 300].map((angle, i) => (
+                   <motion.div 
+                    key={i}
+                    initial={{ scale: 0.1, x: 0, y: 100, opacity: 0 }}
+                    animate={{ 
+                      scale: 3 + Math.random(), 
+                      x: Math.cos(angle * Math.PI / 180) * 350, 
+                      y: Math.sin(angle * Math.PI / 180) * 150,
+                      opacity: [0, 0.9, 0.2] 
+                    }}
+                    transition={{ duration: 0.8, delay: 0.05 + i * 0.03, ease: "easeOut" }}
+                    className="absolute w-56 h-48 bg-slate-900/90 rounded-full blur-3xl mix-blend-multiply"
+                   />
+                 ))}
+
+                 {/* Ground Fire Reflection (Expanding) */}
+                 <motion.div 
+                    initial={{ scale: 0, opacity: 0 }}
+                    animate={{ scale: 15, opacity: [0, 1, 0] }}
+                    transition={{ duration: 1.0, ease: "easeOut" }}
+                    className="absolute bottom-[-100px] w-40 h-10 bg-orange-500/30 rounded-full blur-[100px]"
+                 />
+              </div>
+
+              {/* Dust Shockwave */}
+              <motion.div 
+                initial={{ scale: 0, opacity: 0 }}
+                animate={{ scale: 18, opacity: [0, 1, 0] }}
+                transition={{ duration: 0.6, ease: "easeOut" }}
+                className="absolute bottom-0 w-40 h-8 border-[15px] border-slate-400/20 rounded-[50%] blur-lg"
+              />
+            </div>
+
+            {/* Impact Text */}
+            <motion.div
+               initial={{ scale: 0, y: 100 }}
+               animate={{ scale: [0, 1.4, 1.2], y: 0 }}
+               transition={{ duration: 0.5, delay: 0.1 }}
+               className="absolute top-[20%] z-[300]"
+            >
+               <div className="relative">
+                  <h2 className="text-9xl font-black text-red-600 italic tracking-tighter filter blur-[1px]">BOOM!</h2>
+                  <h2 className="text-9xl font-black text-white italic tracking-tighter absolute inset-0 -translate-x-1 -translate-y-1">BOOM!</h2>
+               </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      <AnimatePresence>
+        {showRegionCutscene && (
+          <motion.div 
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="absolute inset-0 z-[100] flex flex-col items-center justify-center text-white p-6 text-center"
+            style={{ 
+              background: `radial-gradient(circle at center, ${transitionRegion.colors[0]}, ${transitionRegion.colors[1]})` 
+            }}
+          >
+            <motion.div
+              initial={{ scale: 0, rotate: -20 }}
+              animate={{ scale: 1, rotate: 0 }}
+              transition={{ type: 'spring', damping: 10, stiffness: 100 }}
+              className="relative mb-12"
+            >
+              <div className="absolute inset-0 blur-3xl opacity-30 animate-pulse bg-white rounded-full scale-150" />
+              {transitionRegion.name === "Zen Orchard" && <Trees className="w-56 h-56 text-emerald-400 relative z-10 drop-shadow-[0_0_20px_rgba(52,211,153,0.5)]" />}
+              {transitionRegion.name === "Tropical Bay" && (
+                <div className="relative z-10 flex flex-col items-center">
+                  <Palmtree className="w-56 h-56 text-blue-400 drop-shadow-[0_0_30px_rgba(96,165,250,0.6)]" />
+                  <span className="text-8xl absolute -bottom-4 -right-4">🏝️</span>
+                </div>
+              )}
+              {transitionRegion.name === "Shadow Peaks" && <Mountain className="w-56 h-56 text-purple-400 relative z-10 drop-shadow-[0_0_30px_rgba(192,132,252,0.6)]" />}
+              {transitionRegion.name === "Imperial Harvest" && (
+                <div className="relative z-10 flex flex-col items-center">
+                  <Sun className="w-56 h-56 text-orange-400 drop-shadow-[0_0_30px_rgba(251,146,60,0.6)]" />
+                  <span className="text-8xl absolute -bottom-4 -left-4">⛩️</span>
+                </div>
+              )}
+            </motion.div>
+
+            <div className="relative">
+              <motion.p 
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ delay: 0.3 }}
+                className="text-white/40 text-xl font-black uppercase tracking-[1em] mb-4 drop-shadow-md"
+              >
+                Entering
+              </motion.p>
+              
+              <motion.h2 
+                initial={{ opacity: 0, scale: 0.8 }}
+                animate={{ opacity: 1, scale: 1 }}
+                transition={{ delay: 0.5, type: 'spring' }}
+                className="text-7xl md:text-9xl font-black italic tracking-tighter drop-shadow-[0_10px_20px_rgba(0,0,0,0.5)] mb-8"
+              >
+                {transitionRegion.name}
+              </motion.h2>
+
+              <div className="flex justify-center gap-4">
+                 {[1,2,3].map(i => (
+                   <motion.div 
+                     key={i}
+                     initial={{ scaleX: 0 }}
+                     animate={{ scaleX: 1 }}
+                     transition={{ delay: 0.6 + (i * 0.1), duration: 1.2 }}
+                     className="h-1 w-24 bg-white/30 rounded-full origin-left"
+                   />
+                 ))}
+              </div>
+            </div>
+
+            {/* Decorative Wind/Aura */}
+            <motion.div
+              animate={{ 
+                x: [-50, 50, -50],
+                y: [-20, 20, -20],
+                opacity: [0.1, 0.3, 0.1]
+              }}
+              transition={{ duration: 4, repeat: Infinity }}
+              className="absolute top-1/4 right-1/4 pointer-events-none"
+            >
+              <Wind className="w-32 h-32 text-white/10" />
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       {showLevelUp && (
         <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/60 z-40 backdrop-blur-md animate-in fade-in duration-500">
           <div className="text-center px-4 max-w-2xl">
